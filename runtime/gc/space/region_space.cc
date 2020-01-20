@@ -32,6 +32,8 @@ namespace space {
 // value of the region size, evaculate the region.
 static constexpr uint kEvacuateLivePercentThreshold = 75U;
 
+static constexpr uint kTimeToConsiderAgainForCollection = 2U;
+
 // Whether we protect the unused and cleared regions.
 static constexpr bool kProtectClearedRegions = true;
 
@@ -203,7 +205,7 @@ void RegionSpace::Region::SetAsUnevacFromSpace(bool clear_live_bytes) {
     // to RegionSpace::SetFromSpace and RegionSpace::ClearFromSpace).
     is_newly_allocated_ = false;
   }
-  if (clear_live_bytes) {
+  if (clear_live_bytes && !IsAged()) {
     // Reset the live bytes, as we have made a non-evacuation
     // decision (possibly based on the percentage of live bytes).
     live_bytes_ = 0;
@@ -270,9 +272,9 @@ inline bool RegionSpace::Region::ShouldBeEvacuated(EvacMode evac_mode) {
       DCHECK(IsInToSpace());
       DCHECK(!IsLargeTail());
       DCHECK_NE(live_bytes_, static_cast<size_t>(-1));
-      DCHECK_LE(live_bytes_, BytesAllocated());
+     // DCHECK_LE(live_bytes_, BytesAllocated());
       const size_t bytes_allocated = RoundUp(BytesAllocated(), kRegionSize);
-      DCHECK_LE(live_bytes_, bytes_allocated);
+     // DCHECK_LE(live_bytes_, bytes_allocated);
       if (IsAllocated()) {
         // Side node: live_percent == 0 does not necessarily mean
         // there's no live objects due to rounding (there may be a
@@ -358,12 +360,19 @@ void RegionSpace::SetFromSpace(accounting::ReadBarrierTable* rb_table,
                type == RegionType::kRegionTypeToSpace);
         bool should_evacuate = r->ShouldBeEvacuated(evac_mode);
         bool is_newly_allocated = r->IsNewlyAllocated();
+        
+        if(r->successive_age_>kRegionAgeForNoGc*kTimeToConsiderAgainForCollection){
+           r->successive_age_=kRegionAgeForNoGc-2;
+        } 
+        
         if (should_evacuate) {
           r->SetAsFromSpace();
           DCHECK(r->IsInFromSpace());
+          r->successive_age_=0;
         } else {
           r->SetAsUnevacFromSpace(clear_live_bytes);
           DCHECK(r->IsInUnevacFromSpace());
+          r->successive_age_++;
         }
         if (UNLIKELY(state == RegionState::kRegionStateLarge &&
                      type == RegionType::kRegionTypeToSpace)) {
@@ -659,7 +668,7 @@ void RegionSpace::CheckLiveBytesAgainstRegionBitmap(Region* r) {
                                     reinterpret_cast<uintptr_t>(r->Top()),
                                     recount_live_bytes);
   // Check that this recount matches the region's current live bytes count.
-  DCHECK_EQ(live_bytes_recount, r->LiveBytes());
+ // DCHECK_EQ(live_bytes_recount, r->LiveBytes());
 }
 
 // Poison the memory area in range [`begin`, `end`) with value `kPoisonDeadObject`.

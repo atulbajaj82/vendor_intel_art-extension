@@ -330,6 +330,9 @@ void ConcurrentCopying::BindBitmaps() {
       CHECK(space == region_space_ || space == heap_->non_moving_space_);
       if (use_generational_cc_) {
         if (space == region_space_) {
+     /*    if(!young_gen_){
+           region_space_->ClearBitmapNonPermRegions();
+          }*/
           region_space_bitmap_ = region_space_->GetMarkBitmap();
         } else if (young_gen_ && space->IsContinuousMemMapAllocSpace()) {
           DCHECK_EQ(space->GetGcRetentionPolicy(), space::kGcRetentionPolicyAlwaysCollect);
@@ -1089,9 +1092,6 @@ class ConcurrentCopying::ComputeLiveBytesAndMarkRefFieldsVisitor {
       // Nothing to do.
       return;
     }
-    if (!collector_->TestAndSetMarkBitForRef(ref)) {
-      collector_->PushOntoLocalMarkStack(ref);
-    }
     if (kHandleInterRegionRefs && !contains_inter_region_idx_) {
       size_t ref_region_idx = collector_->RegionSpace()->RegionIdxForRef(ref);
       // If a region-space object refers to an outside object, we will have a
@@ -1100,6 +1100,11 @@ class ConcurrentCopying::ComputeLiveBytesAndMarkRefFieldsVisitor {
       if (ref_region_idx != static_cast<size_t>(-1) && obj_region_idx_ != ref_region_idx) {
         contains_inter_region_idx_ = true;
       }
+    }
+    
+   /* if(collector_->RegionSpace()->IsInPermRegion(ref) && !contains_inter_region_idx_){     
+    } else*/ if (!collector_->TestAndSetMarkBitForRef(ref)) {
+      collector_->PushOntoLocalMarkStack(ref);
     }
   }
 
@@ -1116,6 +1121,7 @@ void ConcurrentCopying::AddLiveBytesAndScanRef(mirror::Object* ref) {
   if (LIKELY(region_space_->HasAddress(ref))) {
     obj_region_idx = region_space_->RegionIdxForRefUnchecked(ref);
     // Add live bytes to the corresponding region
+    if(!region_space_->IsInPermRegion_01(ref)){
     if (!region_space_->IsRegionNewlyAllocated(obj_region_idx)) {
       // Newly Allocated regions are always chosen for evacuation. So no need
       // to update live_bytes_.
@@ -1123,6 +1129,7 @@ void ConcurrentCopying::AddLiveBytesAndScanRef(mirror::Object* ref) {
       size_t alloc_size = RoundUp(obj_size, space::RegionSpace::kAlignment);
       region_space_->AddLiveBytes(ref, alloc_size);
     }
+   }
   }
   ComputeLiveBytesAndMarkRefFieldsVisitor</*kHandleInterRegionRefs*/ true>
       visitor(this, obj_region_idx);
@@ -2223,7 +2230,7 @@ inline void ConcurrentCopying::ProcessMarkStackRef(mirror::Object* to_ref) {
     if (use_generational_cc_ && young_gen_) {
       Scan<true>(to_ref);
     } else {
-      Scan<false>(to_ref);
+      	Scan<false>(to_ref);
     }
   }
   if (kUseBakerReadBarrier) {

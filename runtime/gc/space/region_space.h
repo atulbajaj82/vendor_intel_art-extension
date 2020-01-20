@@ -228,7 +228,40 @@ class RegionSpace final : public ContinuousMemMapAllocSpace {
   static constexpr size_t kAlignment = kObjectAlignment;
   // The region size.
   static constexpr size_t kRegionSize = 256 * KB;
+///////////////////////atul.b///////////////////////////////////
+ static constexpr size_t kRegionAgeForNoGc=10;
 
+  bool IsInPermRegion(mirror::Object* ref) {
+     if (HasAddress(ref)) {
+      Region *refTo= RefToRegionUnlocked(ref);
+      //LOG(INFO)<<"atul.b Age of ref is "<<refTo->age_<<" its address "<<refTo<<"\n";
+      return (refTo->successive_age_>=kRegionAgeForNoGc)? true : false;
+     }
+     return false;
+  }
+
+  bool IsInPermRegion_01(mirror::Object* ref) {
+      Region *refTo= RefToRegionUnlocked(ref);
+      return (refTo->successive_age_>=kRegionAgeForNoGc)? true : false;
+  }
+
+
+  void ClearBitmapNonPermRegions()
+  {
+   MutexLock mu(Thread::Current(), region_lock_);
+   for (size_t i = 0; i < num_regions_; ++i) {
+        Region* r = &regions_[i];
+        if(!r->IsAged()){
+         GetMarkBitmap()->ClearRange(
+              reinterpret_cast<mirror::Object*>(r->Begin()),
+              reinterpret_cast<mirror::Object*>(r->End() ));
+
+        }
+    }
+  }
+
+
+//////////////////////////////////////////////////////////
   bool IsInFromSpace(mirror::Object* ref) {
     if (HasAddress(ref)) {
       Region* r = RefToRegionUnlocked(ref);
@@ -320,8 +353,10 @@ class RegionSpace final : public ContinuousMemMapAllocSpace {
       MutexLock mu(Thread::Current(), region_lock_);
       for (size_t i = 0; i < num_regions_; ++i) {
         Region* r = &regions_[i];
+        if(!r->IsAged()){
         size_t live_bytes = r->LiveBytes();
         CHECK(live_bytes == 0U || live_bytes == static_cast<size_t>(-1)) << live_bytes;
+       }
       }
     }
   }
@@ -335,7 +370,7 @@ class RegionSpace final : public ContinuousMemMapAllocSpace {
       Region* r = &regions_[i];
       // Newly allocated regions don't need up-to-date live_bytes_ for deciding
       // whether to be evacuated or not. See Region::ShouldBeEvacuated().
-      if (!r->IsFree() && !r->IsNewlyAllocated()) {
+      if (!r->IsFree() && !r->IsNewlyAllocated() && !r->IsAged()) {
         r->ZeroLiveBytes();
       }
     }
@@ -385,6 +420,7 @@ class RegionSpace final : public ContinuousMemMapAllocSpace {
           alloc_time_(0),
           is_newly_allocated_(false),
           is_a_tlab_(false),
+          successive_age_(0), 
           state_(RegionState::kRegionStateAllocated),
           type_(RegionType::kRegionTypeToSpace) {}
 
@@ -400,6 +436,7 @@ class RegionSpace final : public ContinuousMemMapAllocSpace {
       live_bytes_ = static_cast<size_t>(-1);
       is_newly_allocated_ = false;
       is_a_tlab_ = false;
+      successive_age_=0;
       thread_ = nullptr;
       DCHECK_LT(begin, end);
       DCHECK_EQ(static_cast<size_t>(end - begin), kRegionSize);
@@ -462,7 +499,14 @@ class RegionSpace final : public ContinuousMemMapAllocSpace {
       }
       return is_large;
     }
-
+/////////////////////////////////////////////////
+inline bool IsAged(){
+       if(successive_age_>=kRegionAgeForNoGc){
+        return true;
+      }
+      return false;
+    }
+////////////////////////////////////////////////
     void ZeroLiveBytes() {
       live_bytes_ = 0;
     }
@@ -547,7 +591,7 @@ class RegionSpace final : public ContinuousMemMapAllocSpace {
       DCHECK_NE(live_bytes_, static_cast<size_t>(-1));
       // For large allocations, we always consider all bytes in the regions live.
       live_bytes_ += IsLarge() ? Top() - begin_ : live_bytes;
-      DCHECK_LE(live_bytes_, BytesAllocated());
+      //DCHECK_LE(live_bytes_, BytesAllocated());
     }
 
     bool AllAllocatedBytesAreLive() const {
@@ -616,6 +660,7 @@ class RegionSpace final : public ContinuousMemMapAllocSpace {
     // special value for `live_bytes_`.
     bool is_newly_allocated_;           // True if it's allocated after the last collection.
     bool is_a_tlab_;                    // True if it's a tlab.
+    size_t successive_age_;
     RegionState state_;                 // The region state (see RegionState).
     RegionType type_;                   // The region type (see RegionType).
 
